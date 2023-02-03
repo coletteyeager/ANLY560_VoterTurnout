@@ -1,0 +1,52 @@
+---
+title: "Read Weather"
+author: "Colette Yeager"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+```{r}
+filenames <- list.files(path="data/Weather/")
+files <- lapply(paste0("data/Weather/", filenames), read.csv)
+```
+
+```{r}
+clean_files <- function(state, num){
+  state <- as.data.frame(files[num])
+  state$st <- colnames(as.data.frame(files[num]))[1]
+  state <- state[-c(1:4), ] %>%
+    select(!c(November))
+  colnames(state) = c("Date", "Precipitation", "State")
+  state <- state %>%
+    mutate(Date = substr(Date, 1, 4))
+  return(state)
+}
+```
+
+```{r}
+states = c("Alaska", "Alabama", "Arkansas", "Arizona", "California",
+           "Colorado", "Connecticut", "Delaware", "Florida", "Georgia",
+           "Iowa", "Idaho", "Illinois", "Indiana", "Kansas", "Kentucky",
+           "Louisiana", "Massachusettes", "Maryland", "Maine", "Michigan",
+           "Minnesota", "Missouri", "Mississippi", "Montana", "North.Carolina", 
+           "North.Dakota", "Nebraska", "New.Hampshire", "New.Jersey", 
+           "New.Mexico", "Nevada", "New.York", "Ohio", "Oklahoma", "Oregon",
+           "Pennsylvania", "Rhode.Island", "South.Carolina", "South.Dakota",
+           "Tennessee", "Texas", "Utah", "Virginia", "Vermont", "Washington",
+           "Wisconsin", "West.Virginia", "Wyoming")
+
+sts = data.frame()
+for (i in 1:49){
+  sts = rbind(sts, clean_files(states[i], i))
+}
+```
+
+```{r}
+write.csv(sts, "state_weather.csv", row.names = FALSE)
+```
+
