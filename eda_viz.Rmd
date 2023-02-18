@@ -1,0 +1,415 @@
+---
+title: "EDA and Data Viz Plots"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(lubridate)
+library(maps)
+library(gganimate)
+library(transformr)
+library(ggthemes)
+library(gifski)
+library(png)
+
+rm(list = ls())
+```
+
+```{r}
+census_voters = read.csv("Time_Series_Analysis/data/census_voters_aggregates.csv")
+demo_turnout = read.csv("Time_Series_Analysis/data/Demo_Turnout_rates.csv")
+nat_precip = read.csv("Time_Series_Analysis/data/Nat_Precip.csv") %>%
+  mutate(Date = as.Date(Date, "%Y-%m-%d"))
+nat_gdp = readxl::read_excel("Time_Series_Analysis/data/National_GDP.xlsx") %>%
+  mutate(Date = as.Date(Date, "%Y-%m-%d"))
+nat_turnout = read.csv("Time_Series_Analysis/data/National_Turnout_1789_2018.csv")
+state_gdp_employment = read.csv("Time_Series_Analysis/data/State_GDP_employment.csv")
+state_weather = read.csv("Time_Series_Analysis/data/state_weather.csv")
+state_turnout = read.csv("Time_Series_Analysis/data/Turnout_by_state.csv") %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+```
+
+```{r}
+state_gdp_employment <- reshape2::melt(state_gdp_employment, 
+                                       id = c("GeoName","Description")) %>%
+  rename(State = GeoName, Type_of_Value = Description, 
+         Year = variable, Value = value) %>%
+  mutate(Year = year(as.Date(gsub('X','', Year), "%Y"))) %>%
+  mutate(Type_of_Value = substring(Type_of_Value, 3))
+```
+
+# Data Visualization
+
+## Turnout
+
+```{r}
+age <- demo_turnout %>%
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = Age_18to29, color = "18 to 29")) +
+  geom_line(aes(y = Age_30to44, color = "30 to 44")) +
+  geom_line(aes(y = Age_45to59, color = "45 to 59")) +
+  geom_line(aes(y = Age_60plus, color = "60 plus")) +
+  labs(y = "Turnout Rate", title = "Turnout by Age", color = "Age") +
+  theme_minimal() +
+  theme(legend.position="bottom")
+ggsave("demo_age.png")
+
+ethnicity <- demo_turnout %>%
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = Ethicity_NonHispanic_White, color = "Non-Hispanic White")) +
+  geom_line(aes(y = Ethnicity_NonHispanic_Black, color = "Non-Hispanic Black")) +
+  geom_line(aes(y = Ethnicity_Hispanic, color = "Hispanic")) +
+  geom_line(aes(y = Ethnicity_Other, color = "Other")) +
+  labs(y = "Turnout Rate", title = "Turnout by Race and Ethnicity", color = "Race and Ethnicity") +
+  theme_minimal() +
+  theme(legend.position="bottom")
+ggsave("demo_eth.png")
+
+education <- demo_turnout %>%
+  ggplot(aes(x = Date)) +
+  geom_line(aes(y = Education_Less_Than_HS, color = "Less than High School")) +
+  geom_line(aes(y = Education_HS_Grad, color = "High School Grad")) +
+  geom_line(aes(y = Education_SomeCollege_CollegeGrad, color = "Some College or College Grad")) +
+  geom_line(aes(y = Education_PostGraduate, color = "Post Graduate")) +
+  labs(y = "Turnout Rate", title = "Turnout by Education", color = "Education") +
+  theme_minimal() +
+  theme(legend.position="bottom")
+ggsave("demo_edu.png")
+```
+
+The other turnout graphs can be found [here]("https://public.tableau.com/views/Turnout_dashboard/Dashboard2?:display_count=n&:origin=viz_share_link").
+
+## Economy
+
+```{r}
+nat_gdp_plot <- nat_gdp %>%
+  ggplot(aes(x = Date, y = GDP)) +
+  geom_line() +
+  labs(x = "Date", y = "GDP (Billions)", title = "National GDP over Time, Quarterly") +
+  theme_minimal()
+
+ggplotly(nat_gdp_plot)
+```
+
+```{r}
+us_map <- map_data(map = "state") %>%
+  mutate(region = str_to_title(region))
+
+gdp_map <- us_map %>%
+  left_join(state_gdp_employment, by = c("region" = "State")) %>%
+  filter(Type_of_Value == "Gross domestic product (GDP)")
+
+p_test_2 <- gdp_map %>%
+  ggplot(aes(x = long, y = lat, group = group)) +
+  geom_polygon(aes(fill = (Value/1000))) +
+  scale_fill_gradient(low = "aliceblue", high = "midnightblue", name = "GDP (Billions)") +
+  coord_map("polyconic") +
+  theme_map() +
+  ggtitle("GDP in {1997 + frame}") +
+  transition_manual(Year)
+
+animate(p_test_2, nframes = 50)
+anim_save("state_gdp.gif")
+```
+
+```{r}
+employment_map <- us_map %>%
+  left_join(state_gdp_employment, by = c("region" = "State")) %>%
+  filter(Type_of_Value == "Total Employment (number of jobs)")
+
+p_test_2 <- gdp_map %>%
+  ggplot(aes(x = long, y = lat, group = group)) +
+  geom_polygon(aes(fill = (Value))) +
+  scale_fill_gradient(low = "honeydew", high = "darkslategray", name = "Number of Jobs") +
+  coord_map("polyconic") +
+  theme_map() +
+  ggtitle("Employment in {1997 + frame}") +
+  transition_manual(Year)
+
+animate(p_test_2, nframes = 50)
+anim_save("state_employment.gif")
+```
+
+## Weather
+```{r}
+nat_turnout_for_plot <- nat_turnout %>%
+  filter(Year > 1895) %>%
+  mutate(Date = as.Date(as.character(Year), "%Y"))
+
+# turnout_plus_weather <- nat_turnout %>%
+#   filter(Year > 1895) %>%
+#   mutate(Date = as.Date(as.character(Year), "%Y")) %>%
+#   full_join(nat_precip, by = "Date") %>%
+#   (Date)
+
+fig <- plot_ly(nat_precip)
+
+fig <- fig %>%
+  add_trace(x = ~Date, y = ~Precipitation, type = "scatter", mode = "lines", name = "November Precipiation")
+
+fig <- fig %>%
+  add_trace(nat_turnout_for_plot, x = ~nat_turnout_for_plot$Date, y = ~nat_turnout_for_plot$Turnout, name = "Turnout", type = "scatter", yaxis = "y2", mode = "lines")
+
+fig <- fig %>% layout(
+  title = "Precipitation and Weather", 
+  xaxis = list(title = "Date"),
+  yaxis = list(title = "Precipitation"),
+  yaxis2 = list(overlaying = "y", side = "right", title = "Turnout Rate"),
+  hovermode = "x"
+)
+fig
+```
+
+```{r}
+nat_precip_plot <- nat_precip %>%
+  ggplot(aes(x = Date, y = Precipitation)) +
+  geom_line() +
+  scale_y_continuous(name = "Precipitation", sec.axis = sec_axis(~.*10, name = "Turnout")) +
+  scale_x_date(breaks = '25 years', date_labels = "%Y") +
+  labs(x = "Date", y = "Precipitation", title = "November Precipitation") +
+  theme_minimal()
+
+ggplotly(nat_precip_plot)
+```
+
+```{r}
+weather_map <- us_map %>%
+  left_join(state_weather, by = c("region" = "State"))
+
+p_weather <- weather_map %>%
+  ggplot(aes(x = long, y = lat, group = group)) +
+  geom_polygon(aes(fill = Precipitation)) +
+  scale_fill_gradient(low = "floralwhite", high = "darkred", name = "Precipitation (In)") +
+  coord_map("polyconic") +
+  theme_map() +
+  ggtitle("November Precipitation in {1894 + frame}") +
+  transition_manual(Date)
+
+animate(p_weather, nframes = 200)
+anim_save("state_weather.gif")
+```
+
+# EDA
+
+## Turnout
+
+```{r}
+# Initial Time Series Plot
+nat_turnout_plot <- nat_turnout %>%
+  ggplot(aes(x = Year, y = Turnout)) +
+  geom_line() +
+  scale_y_continuous(labels = scales::label_comma(suffix = '%')) +
+  labs(title = "National Turnout Over Time") +
+  theme_minimal()
+
+ggplotly(nat_turnout_plot)
+```
+
+```{r}
+# TS Object
+turnout_ts <- ts(nat_turnout$Turnout, start = 1788, frequency = 0.5)
+```
+
+```{r}
+# Lag Plot
+gglagplot(turnout_ts, lags = 12, do.lines = FALSE)
+```
+
+```{r}
+# Decomposed Plot
+# Not able to decompose - fewer than 2 periods because it's every 2 years
+# Can see the trend from plotting presidential and midterm separately
+
+nat_turnout_plot_decomposed <- nat_turnout %>%
+  ggplot(aes(x = Year, y = Turnout)) +
+  geom_line(aes(color = Type)) +
+  scale_y_continuous(labels = scales::label_comma(suffix = '%')) +
+  scale_color_manual(values = c("darkgreen", "purple")) +
+  labs(title = "National Turnout Over Time - Trend Lines") +
+  theme_minimal()
+
+ggplotly(nat_turnout_plot_decomposed)
+
+```
+
+```{r}
+# ACF and PACF
+turnout_acf <- ggAcf(turnout_ts, 20) +
+  labs(x = "Lag", y = "ACF", title = "Turnout ACF Plot") +
+  theme_minimal()
+
+turnout_pacf <- ggPacf(turnout_ts, 20) +
+  labs(x = "Lag", y = "PACF", title = "Turnout PACF Plot") +
+  theme_minimal()
+
+grid.arrange(turnout_acf, turnout_pacf, ncol = 2)
+```
+
+```{r}
+# ADF Test
+tseries::adf.test(turnout_ts)
+```
+
+```{r}
+# Differenced/Log Transformed
+p1 <- autoplot(turnout_ts) +
+  labs(x = "Year", y = "Turnout", title = "Original Turnout") +
+  theme_minimal()
+
+p2 <- autoplot(diff(turnout_ts)) +
+  labs(x = "Year", y = "Diff(Turnout)", title = "First-Order Differenced Turnout") +
+  theme_minimal()
+
+p3 <- autoplot(log(turnout_ts)) +
+  labs(x = "Year", y = "Log(Turnout)", title = "Log-Transformed Turnout") +
+  theme_minimal()
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+```{r}
+# ACF Compare
+p1_acf <- ggAcf(turnout_ts, 20) +
+  labs(x = "Lag", y = "ACF", title = "Original Turnout ACF Plot") +
+  theme_minimal()
+
+p2_acf <- ggAcf(diff(turnout_ts), 20) +
+  labs(x = "Lag", y = "ACF", title = "First-Order Differenced Turnout ACF Plot") +
+  theme_minimal()
+
+p3_acf <- ggAcf(log(turnout_ts), 20) +
+  labs(x = "Lag", y = "ACF", title = "Log-Transformed Turnout ACF Plot") +
+  theme_minimal()
+
+grid.arrange(p1_acf, p2_acf, p3_acf, ncol = 1)
+```
+
+## Economic Conditions
+
+```{r}
+# Initial Time Series Plot
+nat_gdp_plt <- nat_gdp %>%
+  ggplot(aes(x = Date, y = GDP)) +
+  geom_line() +
+  labs(title = "National GDP Over Time") +
+  theme_minimal()
+
+ggplotly(nat_gdp_plt)
+```
+
+```{r}
+# TS Object
+gdp_ts <- ts(nat_gdp$GDP, start = c(1947, 1), frequency = 4)
+```
+
+```{r}
+# Lag Plot
+gglagplot(gdp_ts, lags = 12, do.lines = FALSE)
+```
+
+```{r}
+# Decomposed Plot
+decomposed_gdp = decompose(gdp_ts, "multiplicative")
+autoplot(decomposed_gdp)
+```
+
+```{r}
+# ACF and PACF
+gdp_acf <- ggAcf(gdp_ts, 30) +
+  labs(x = "Lag", y = "ACF", title = "GDP ACF Plot") +
+  theme_minimal()
+
+gdp_pacf <- ggPacf(gdp_ts, 30) +
+  labs(x = "Lag", y = "PACF", title = "GDP PACF Plot") +
+  theme_minimal()
+
+grid.arrange(gdp_acf, gdp_pacf, ncol = 2)
+```
+
+```{r}
+# ADF Test
+tseries::adf.test(gdp_ts)
+```
+
+```{r}
+# Differenced/Log Transformed
+p11 <- autoplot(gdp_ts) +
+  labs(x = "Year", y = "GDP", title = "Original GDP") +
+  theme_minimal()
+
+p22 <- autoplot(diff(gdp_ts)) +
+  labs(x = "Year", y = "Diff(GDP)", title = "First-Order Differenced GDP") +
+  theme_minimal()
+
+p33 <- autoplot(log(gdp_ts)) +
+  labs(x = "Year", y = "Log(GDP)", title = "Log-Transformed GDP") +
+  theme_minimal()
+
+grid.arrange(p11, p22, p33, ncol = 1)
+```
+
+```{r}
+# ACF Compare
+p11_acf <- ggAcf(gdp_ts, 20) +
+  labs(x = "Lag", y = "ACF", title = "Original GDP ACF Plot") +
+  theme_minimal()
+
+p22_acf <- ggAcf(diff(gdp_ts), 20) +
+  labs(x = "Lag", y = "ACF", title = "First-Order Differenced GDP ACF Plot") +
+  theme_minimal()
+
+p33_acf <- ggAcf(log(gdp_ts), 20) +
+  labs(x = "Lag", y = "ACF", title = "Log-Transformed GDP ACF Plot") +
+  theme_minimal()
+
+grid.arrange(p11_acf, p22_acf, p33_acf, ncol = 1)
+```
+
+## Weather
+
+```{r}
+# Initial Time Series Plot
+nat_precip_plt <- nat_precip %>%
+  ggplot(aes(x = Date, y = Precipitation)) +
+  geom_line() +
+  labs(title = "National Precipitation Over Time") +
+  theme_minimal()
+
+ggplotly(nat_precip_plt)
+```
+
+```{r}
+# TS Object
+precip_ts <- ts(nat_precip$Precipitation, start = 1895, frequency = 1)
+```
+
+```{r}
+# Lag Plot
+gglagplot(precip_ts, lags = 12, do.lines = FALSE)
+```
+
+```{r}
+# Decomposed Plot
+# Not able to do - only one every year
+```
+
+```{r}
+# ACF and PACF
+precip_acf <- ggAcf(precip_ts, 30) +
+  labs(x = "Lag", y = "ACF", title = "Precipitation ACF Plot") +
+  theme_minimal()
+
+precip_pacf <- ggPacf(precip_ts, 30) +
+  labs(x = "Lag", y = "PACF", title = "Precipitation PACF Plot") +
+  theme_minimal()
+
+grid.arrange(precip_acf, precip_pacf, ncol = 2)
+```
+
+```{r}
+# ADF Test
+tseries::adf.test(precip_ts)
+```
