@@ -1,0 +1,466 @@
+---
+title: "ARMA/ARIMA/SARIMA Models"
+output: html_notebook
+---
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(lubridate)
+library(maps)
+library(gganimate)
+library(transformr)
+library(ggthemes)
+library(gifski)
+library(png)
+library(forecast)
+library(gridExtra)
+```
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+demo_turnout = read.csv("data/Demo_Turnout_rates.csv")
+nat_precip = read.csv("data/Nat_Precip.csv") %>%
+  mutate(Date = as.Date(Date, "%Y-%m-%d"))
+nat_gdp = readxl::read_excel("data/National_GDP.xlsx") %>%
+  mutate(Date = as.Date(Date, "%Y-%m-%d"))
+nat_turnout = read.csv("data/National_Turnout_1789_2018.csv")
+state_gdp_employment = read.csv("data/State_GDP_employment.csv")
+state_weather = read.csv("data/state_weather.csv")
+state_turnout = read.csv("data/Turnout_by_state.csv") %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+
+state_gdp_employment <- reshape2::melt(state_gdp_employment, 
+                                       id = c("GeoName","Description")) %>%
+  rename(State = GeoName, Type_of_Value = Description, 
+         Year = variable, Value = value) %>%
+  mutate(Year = year(as.Date(gsub('X','', Year), "%Y"))) %>%
+  mutate(Type_of_Value = substring(Type_of_Value, 3))
+```
+
+```{r}
+# Time Series objects
+turnout_ts <- ts(nat_turnout$Turnout, start = 1788, frequency = 0.5)
+gdp_ts <- ts(nat_gdp$GDP, start = c(1947, 1), frequency = 4)
+precip_ts <- ts(nat_precip$Precipitation, start = 1895, frequency = 1)
+```
+
+## Turnout
+
+```{r}
+# Original ACF Plot
+turnout_acf <- ggAcf(turnout_ts, 20) +
+  labs(x = "Lag", y = "ACF", title = "Turnout ACF Plot") +
+  theme_minimal()
+
+turnout_acf
+```
+
+```{r}
+# Original ADF Test
+tseries::adf.test(turnout_ts)
+```
+
+```{r}
+# Differenced Plots
+p1 <- autoplot(turnout_ts) +
+  labs(x = "Year", y = "Turnout", title = "Original Turnout") +
+  theme_minimal()
+
+p2 <- autoplot(diff(turnout_ts)) +
+  labs(x = "Year", y = "Diff(Turnout)", title = "First-Order Differenced Turnout") +
+  theme_minimal()
+
+p3 <- autoplot(diff(diff(turnout_ts))) +
+  labs(x = "Year", y = "Diff(Diff(Turnout))", title = "Second-Order Differenced Turnout") +
+  theme_minimal()
+
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+```{r}
+# Differenced AFF
+ggAcf(diff(turnout_ts))
+```
+
+```{r}
+# Differenced ADF test
+tseries::adf.test(diff(turnout_ts))
+```
+
+```{r}
+# Differenced ACF and PACF
+turnout_acf <- ggAcf(diff(turnout_ts), 20) +
+  labs(x = "Lag", y = "ACF", title = "Turnout ACF Plot") +
+  theme_minimal()
+
+turnout_pacf <- ggPacf(diff(turnout_ts), 20) +
+  labs(x = "Lag", y = "PACF", title = "Turnout PACF Plot") +
+  theme_minimal()
+
+grid.arrange(turnout_acf, turnout_pacf, ncol = 2)
+```
+
+```{r}
+# q = 0,1,2,3, p = 0,1,2, d = 1
+
+d = 1
+i = 1
+temp = data.frame()
+ls = matrix(rep(NA, 6*12), nrow = 12)
+
+for(p in c(0,1,2)){
+  for(q in c(0,1,2,3)){
+    model <- Arima(turnout_ts, order = c(p,d,q), include.drift = TRUE)
+    ls[i,] = c(p,d,q, model$aic, model$bic, model$aicc)
+    i = i+1
+  }
+}
+
+temp = as.data.frame(ls)
+names(temp) = c("p", "d", "q", "AIC", "BIC", "AICc")
+
+knitr::kable(temp)
+```
+
+```{r}
+# Which model is best
+temp[which.min(temp$AIC), ]
+temp[which.min(temp$BIC), ]
+```
+
+```{r}
+fit_turnout_1 <- Arima(turnout_ts, order = c(1,1,1))
+summary(fit_turnout_1)
+checkresiduals(fit_turnout_1)
+```
+```{r}
+fit_turnout_2 <- Arima(turnout_ts, order = c(2,1,1))
+summary(fit_turnout_2)
+checkresiduals(fit_turnout_2)
+```
+
+```{r}
+# Use auto.arima()
+auto.arima(turnout_ts)
+```
+
+```{r}
+# Forecast
+fcast_turnout_1 <- forecast(fit_turnout_1)
+fcast_turnout_2 <- forecast(fit_turnout_2)
+```
+
+```{r}
+autoplot(fcast_turnout_1)
+autoplot(fcast_turnout_2)
+```
+
+```{r}
+# Plot of benchmark methods
+autoplot(turnout_ts) +
+  autolayer(meanf(turnout_ts, h=24),
+            series="Mean", PI=FALSE) +
+  autolayer(naive(turnout_ts, h=24),
+            series="Naïve", PI=FALSE) +
+  autolayer(snaive(turnout_ts, h=24),
+            series="SNaïve", PI=FALSE)+
+  autolayer(rwf(turnout_ts, h=24, drift=TRUE),
+            series="Drift", PI=FALSE)+
+  autolayer(forecast(fit_turnout_2,24), 
+            series="fit",PI=FALSE) +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+```{r,warning=FALSE}
+# Accuracy of benchmark methods
+mean_fit <- meanf(turnout_ts, h = 36)
+naive_fit <- naive(turnout_ts, h = 36)
+snaive_fit <- snaive(turnout_ts, h=36) 
+rwf_fit <- rwf(turnout_ts, h = 36)
+
+fit_row <- accuracy(fit_turnout_2)
+row.names(fit_row) <- 'ARIMA(2,1,1) Fit'
+mean_row <- accuracy(mean_fit)
+row.names(mean_row) <- 'Mean Fit'
+naive_row <- accuracy(naive_fit)
+row.names(naive_row) <- 'Naïve Fit'
+snaive_row <- accuracy(snaive_fit)
+row.names(snaive_row) <- 'SNaïve Fit'
+```
+
+```{r}
+accuracy_compare <- as.data.frame(rbind(fit_row, mean_row, naive_row, snaive_row))
+knitr::kable(accuracy_compare)
+```
+
+
+## Economic Conditions
+
+```{r}
+# Original ACF Plot
+gdp_acf <- ggAcf(gdp_ts, 20) +
+  labs(x = "Lag", y = "ACF", title = "GDP ACF Plot") +
+  theme_minimal()
+
+gdp_acf
+```
+
+```{r}
+# Original ADF Test
+tseries::adf.test(gdp_ts)
+```
+
+```{r}
+# Differenced Plots
+p1 <- autoplot(gdp_ts) +
+  labs(x = "Year", y = "GDP", title = "Original GDP") +
+  theme_minimal()
+
+p2 <- autoplot(diff(gdp_ts)) +
+  labs(x = "Year", y = "Diff(GDP)", title = "First-Order Differenced GDP") +
+  theme_minimal()
+
+p3 <- autoplot(diff(diff(gdp_ts))) +
+  labs(x = "Year", y = "Diff(Diff(GDP))", title = "Second-Order Differenced GDP") +
+  theme_minimal()
+
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+```{r}
+# Differenced AFF
+ggAcf(diff(gdp_ts))
+```
+
+```{r}
+# Differenced ADF test
+tseries::adf.test(diff(diff(gdp_ts)))
+```
+
+```{r}
+# Differenced ACF and PACF
+gdp_acf <- ggAcf(diff(diff(gdp_ts)), 20) +
+  labs(x = "Lag", y = "ACF", title = "GDP ACF Plot") +
+  theme_minimal()
+
+gdp_pacf <- ggPacf(diff(diff(gdp_ts)), 20) +
+  labs(x = "Lag", y = "PACF", title = "GDP PACF Plot") +
+  theme_minimal()
+
+grid.arrange(gdp_acf, gdp_pacf, ncol = 2)
+```
+
+```{r}
+# q = 0,1,2, p = 0,1,2,3, d = 1,2
+
+d = 2
+i = 1
+temp = data.frame()
+ls = matrix(rep(NA, 6*24), nrow = 24)
+
+for(p in c(0,1,2)){
+  for(q in c(0,1,2,3)){
+    for(d in c(1,2)){
+      model <- Arima(gdp_ts, order = c(p,d,q), include.drift = TRUE, method = 'ML')
+      ls[i,] = c(p,d,q, model$aic, model$bic, model$aicc)
+      i = i+1
+    }
+  }
+}
+
+temp = as.data.frame(ls)
+names(temp) = c("p", "d", "q", "AIC", "BIC", "AICc")
+
+knitr::kable(temp)
+```
+
+```{r}
+# Which model is best
+temp[which.min(temp$AIC), ]
+temp[which.min(temp$BIC), ]
+```
+
+```{r}
+fit_gdp_1 <- Arima(gdp_ts, order = c(1,2,1))
+summary(fit_gdp_1)
+checkresiduals(fit_gdp_1)
+```
+
+```{r}
+fit_gdp_2 <- Arima(gdp_ts, order = c(0,2,1))
+summary(fit_gdp_2)
+checkresiduals(fit_gdp_2)
+```
+
+```{r}
+# Use auto.arima()
+auto.arima(gdp_ts)
+```
+
+```{r}
+# Forecast
+fcast_gdp_1 <- forecast(fit_gdp_1)
+fcast_gdp_2 <- forecast(fit_gdp_2)
+```
+
+```{r}
+autoplot(fcast_gdp_1)
+autoplot(fcast_gdp_2)
+```
+
+```{r}
+# Plot of benchmark methods
+autoplot(gdp_ts) +
+  autolayer(meanf(gdp_ts, h=24),
+            series="Mean", PI=FALSE) +
+  autolayer(naive(gdp_ts, h=24),
+            series="Naïve", PI=FALSE) +
+  autolayer(snaive(gdp_ts, h=24),
+            series="SNaïve", PI=FALSE)+
+  autolayer(rwf(gdp_ts, h=24, drift=TRUE),
+            series="Drift", PI=FALSE)+
+  autolayer(forecast(fit_gdp_2,24), 
+            series="fit",PI=FALSE) +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+```{r,warning=FALSE}
+# Accuracy of benchmark methods
+mean_fit <- meanf(gdp_ts, h = 36)
+naive_fit <- naive(gdp_ts, h = 36)
+snaive_fit <- snaive(gdp_ts, h=36) 
+rwf_fit <- rwf(gdp_ts, h = 36)
+
+fit_row <- accuracy(fit_gdp_2)
+row.names(fit_row) <- 'ARIMA(0,2,1) Fit'
+mean_row <- accuracy(mean_fit)
+row.names(mean_row) <- 'Mean Fit'
+naive_row <- accuracy(naive_fit)
+row.names(naive_row) <- 'Naïve Fit'
+snaive_row <- accuracy(snaive_fit)
+row.names(snaive_row) <- 'SNaïve Fit'
+```
+
+```{r}
+accuracy_compare <- as.data.frame(rbind(fit_row, mean_row, naive_row, snaive_row))
+knitr::kable(accuracy_compare)
+```
+## Weather
+
+```{r}
+# Original ACF Plot
+weather_acf <- ggAcf(precip_ts, 20) +
+  labs(x = "Lag", y = "ACF", title = "Precip ACF Plot") +
+  theme_minimal()
+
+weather_acf
+```
+
+```{r}
+# Original ADF Test
+tseries::adf.test(precip_ts)
+```
+
+```{r}
+# Differenced ACF and PACF
+weather_acf <- ggAcf(precip_ts, 20) +
+  labs(x = "Lag", y = "ACF", title = "Precip ACF Plot") +
+  theme_minimal()
+
+weather_pacf <- ggPacf(precip_ts, 20) +
+  labs(x = "Lag", y = "PACF", title = "Precip PACF Plot") +
+  theme_minimal()
+
+grid.arrange(weather_acf, weather_pacf, ncol = 2)
+```
+
+```{r}
+# q = 0,4, p = 0,4, d = 0
+
+d = 0
+i = 1
+temp = data.frame()
+ls = matrix(rep(NA, 6*25), nrow = 25)
+
+for(p in c(0:4)){
+  for(q in c(0:4)){
+    model <- Arima(precip_ts, order = c(p,d,q))
+    ls[i,] = c(p,d,q, model$aic, model$bic, model$aicc)
+    i = i+1
+  }
+}
+
+temp = as.data.frame(ls)
+names(temp) = c("p", "d", "q", "AIC", "BIC", "AICc")
+
+knitr::kable(temp)
+```
+
+```{r}
+# Which model is best
+temp[which.min(temp$AIC), ]
+temp[which.min(temp$BIC), ]
+```
+
+```{r}
+fit_weather_1 <- Arima(precip_ts, order = c(0,0,0))
+summary(fit_weather_1)
+checkresiduals(fit_weather_1)
+```
+
+
+```{r}
+# Use auto.arima()
+auto.arima(precip_ts)
+```
+
+So it's basically just taking the mean
+```{r}
+# Forecast
+fcast_weather_1 <- forecast(fit_weather_1)
+```
+
+```{r}
+autoplot(fcast_weather_1)
+```
+
+```{r}
+# Plot of benchmark methods
+autoplot(precip_ts) +
+  autolayer(meanf(precip_ts, h=24),
+            series="Mean", PI=FALSE) +
+  autolayer(naive(precip_ts, h=24),
+            series="Naïve", PI=FALSE) +
+  autolayer(snaive(precip_ts, h=24),
+            series="SNaïve", PI=FALSE)+
+  autolayer(rwf(precip_ts, h=24, drift=TRUE),
+            series="Drift", PI=FALSE)+
+  autolayer(forecast(fit_weather_1,24), 
+            series="fit",PI=FALSE) +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+```{r,warning=FALSE}
+# Accuracy of benchmark methods
+mean_fit <- meanf(precip_ts, h = 36)
+naive_fit <- naive(precip_ts, h = 36)
+snaive_fit <- snaive(precip_ts, h=36) 
+rwf_fit <- rwf(precip_ts, h = 36)
+
+fit_row <- accuracy(fit_weather_1)
+row.names(fit_row) <- 'ARIMA(0,0,0) Fit'
+mean_row <- accuracy(mean_fit)
+row.names(mean_row) <- 'Mean Fit'
+naive_row <- accuracy(naive_fit)
+row.names(naive_row) <- 'Naïve Fit'
+snaive_row <- accuracy(snaive_fit)
+row.names(snaive_row) <- 'SNaïve Fit'
+```
+
+```{r}
+accuracy_compare <- as.data.frame(rbind(fit_row, mean_row, naive_row, snaive_row))
+knitr::kable(accuracy_compare)
+```

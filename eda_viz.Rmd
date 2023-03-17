@@ -19,16 +19,16 @@ rm(list = ls())
 ```
 
 ```{r}
-census_voters = read.csv("Time_Series_Analysis/data/census_voters_aggregates.csv")
-demo_turnout = read.csv("Time_Series_Analysis/data/Demo_Turnout_rates.csv")
-nat_precip = read.csv("Time_Series_Analysis/data/Nat_Precip.csv") %>%
+census_voters = read.csv("data/census_voters_aggregates.csv")
+demo_turnout = read.csv("data/Demo_Turnout_rates.csv")
+nat_precip = read.csv("data/Nat_Precip.csv") %>%
   mutate(Date = as.Date(Date, "%Y-%m-%d"))
-nat_gdp = readxl::read_excel("Time_Series_Analysis/data/National_GDP.xlsx") %>%
+nat_gdp = readxl::read_excel("data/National_GDP.xlsx") %>%
   mutate(Date = as.Date(Date, "%Y-%m-%d"))
-nat_turnout = read.csv("Time_Series_Analysis/data/National_Turnout_1789_2018.csv")
-state_gdp_employment = read.csv("Time_Series_Analysis/data/State_GDP_employment.csv")
-state_weather = read.csv("Time_Series_Analysis/data/state_weather.csv")
-state_turnout = read.csv("Time_Series_Analysis/data/Turnout_by_state.csv") %>%
+nat_turnout = read.csv("data/National_Turnout_1789_2018.csv")
+state_gdp_employment = read.csv("data/State_GDP_employment.csv")
+state_weather = read.csv("data/state_weather.csv")
+state_turnout = read.csv("data/Turnout_by_state.csv") %>%
   mutate(Date = as.Date(Date, "%m/%d/%y"))
 ```
 
@@ -55,7 +55,7 @@ age <- demo_turnout %>%
   labs(y = "Turnout Rate", title = "Turnout by Age", color = "Age") +
   theme_minimal() +
   theme(legend.position="bottom")
-ggsave("demo_age.png")
+#ggsave("demo_age.png")
 
 ethnicity <- demo_turnout %>%
   ggplot(aes(x = Date)) +
@@ -66,7 +66,7 @@ ethnicity <- demo_turnout %>%
   labs(y = "Turnout Rate", title = "Turnout by Race and Ethnicity", color = "Race and Ethnicity") +
   theme_minimal() +
   theme(legend.position="bottom")
-ggsave("demo_eth.png")
+#ggsave("demo_eth.png")
 
 education <- demo_turnout %>%
   ggplot(aes(x = Date)) +
@@ -77,7 +77,7 @@ education <- demo_turnout %>%
   labs(y = "Turnout Rate", title = "Turnout by Education", color = "Education") +
   theme_minimal() +
   theme(legend.position="bottom")
-ggsave("demo_edu.png")
+#ggsave("demo_edu.png")
 ```
 
 The other turnout graphs can be found [here]("https://public.tableau.com/views/Turnout_dashboard/Dashboard2?:display_count=n&:origin=viz_share_link").
@@ -111,8 +111,8 @@ p_test_2 <- gdp_map %>%
   ggtitle("GDP in {1997 + frame}") +
   transition_manual(Year)
 
-animate(p_test_2, nframes = 50)
-anim_save("state_gdp.gif")
+#animate(p_test_2, nframes = 50)
+#anim_save("state_gdp.gif")
 ```
 
 ```{r}
@@ -129,8 +129,8 @@ p_test_2 <- gdp_map %>%
   ggtitle("Employment in {1997 + frame}") +
   transition_manual(Year)
 
-animate(p_test_2, nframes = 50)
-anim_save("state_employment.gif")
+#animate(p_test_2, nframes = 50)
+#anim_save("state_employment.gif")
 ```
 
 ## Weather
@@ -188,8 +188,8 @@ p_weather <- weather_map %>%
   ggtitle("November Precipitation in {1894 + frame}") +
   transition_manual(Date)
 
-animate(p_weather, nframes = 200)
-anim_save("state_weather.gif")
+#animate(p_weather, nframes = 200)
+#anim_save("state_weather.gif")
 ```
 
 # EDA
@@ -287,6 +287,31 @@ p3_acf <- ggAcf(log(turnout_ts), 20) +
 grid.arrange(p1_acf, p2_acf, p3_acf, ncol = 1)
 ```
 
+```{r}
+# Moving Average Smoothing
+m5 <- autoplot(turnout_ts, color = 'darkblue') +
+  autolayer(ma(turnout_ts, 5), color = 'red') +
+  labs(x = "Date", y = "Turnout Rate", title = "Turnout (MA-5)") +
+  theme_minimal()
+
+m10 <- autoplot(turnout_ts, color = 'darkblue') +
+  autolayer(ma(turnout_ts, 10), color = 'red') +
+  labs(x = "Date", y = "Turnout Rate", title = "Turnout (MA-10)") +
+  theme_minimal() 
+
+m20 <- autoplot(turnout_ts, color = 'darkblue') +
+  autolayer(ma(turnout_ts, 20), color = 'red') +
+  labs(x = "Date", y = "Turnout Rate", title = "Turnout (MA-20)") +
+  theme_minimal() 
+  
+m50 <- autoplot(turnout_ts, color = 'darkblue') +
+  autolayer(ma(turnout_ts, 50), color = 'red') +
+  labs(x = "Date", y = "Turnout Rate", title = "Turnout (MA-50)") +
+  theme_minimal() 
+
+grid.arrange(m5, m10, m20, m50, nrow = 2)
+```
+
 ## Economic Conditions
 
 ```{r}
@@ -368,6 +393,33 @@ p33_acf <- ggAcf(log(gdp_ts), 20) +
 grid.arrange(p11_acf, p22_acf, p33_acf, ncol = 1)
 ```
 
+
+```{r}
+# Moving Average Smoothing
+m5 <- autoplot(gdp_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(gdp_ts, 5), color = 'red') +
+  labs(x = "Date", y = "GDP", title = "National GDP (MA-5)") +
+  theme_minimal()
+
+m20 <- autoplot(gdp_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(gdp_ts, 20), color = 'red') +
+  labs(x = "Date", y = "GDP", title = "National GDP (MA-20)") +
+  theme_minimal() 
+
+m50 <- autoplot(gdp_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(gdp_ts, 50), color = 'red') +
+  labs(x = "Date", y = "GDP", title = "National GDP (MA-50)") +
+  theme_minimal() 
+  
+m100 <- autoplot(gdp_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(gdp_ts, 100), color = 'red') +
+  labs(x = "Date", y = "GDP", title = "National GDP (MA-100)") +
+  theme_minimal() 
+
+grid.arrange(m5, m20, m50, m100, nrow = 2)
+```
+
+
 ## Weather
 
 ```{r}
@@ -413,3 +465,29 @@ grid.arrange(precip_acf, precip_pacf, ncol = 2)
 # ADF Test
 tseries::adf.test(precip_ts)
 ```
+
+```{r}
+# Moving Average Smoothing
+m5 <- autoplot(precip_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(precip_ts, 5), color = 'red') +
+  labs(x = "Date", y = "Precipitation", title = "National Precipitation (MA-5)") +
+  theme_minimal()
+
+m10 <- autoplot(precip_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(precip_ts, 10), color = 'red') +
+  labs(x = "Date", y = "Precipitation", title = "National Precipitation (MA-10)") +
+  theme_minimal() 
+
+m20 <- autoplot(precip_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(precip_ts, 20), color = 'red') +
+  labs(x = "Date", y = "Precipitation", title = "National Precipitation (MA-20)") +
+  theme_minimal() 
+  
+m50 <- autoplot(precip_ts, color = 'darkblue', size = 0.75) +
+  autolayer(ma(precip_ts, 50), color = 'red') +
+  labs(x = "Date", y = "Precipitation", title = "National Precipitation (MA-50)") +
+  theme_minimal() 
+
+grid.arrange(m5, m10, m20, m50, nrow = 2)
+```
+
