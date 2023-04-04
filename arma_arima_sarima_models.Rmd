@@ -22,6 +22,8 @@ library(gridExtra)
 demo_turnout = read.csv("data/Demo_Turnout_rates.csv")
 nat_precip = read.csv("data/Nat_Precip.csv") %>%
   mutate(Date = as.Date(Date, "%Y-%m-%d"))
+long_nat_precip = read.csv("data/Long_Nat_Precip.csv") %>%
+  mutate(Date = as.Date(as.Date(paste0(Date, "-01")), "%Y-%m-%d"))
 nat_gdp = readxl::read_excel("data/National_GDP.xlsx") %>%
   mutate(Date = as.Date(Date, "%Y-%m-%d"))
 nat_turnout = read.csv("data/National_Turnout_1789_2018.csv")
@@ -43,6 +45,7 @@ state_gdp_employment <- reshape2::melt(state_gdp_employment,
 turnout_ts <- ts(nat_turnout$Turnout, start = 1788, frequency = 0.5)
 gdp_ts <- ts(nat_gdp$GDP, start = c(1947, 1), frequency = 4)
 precip_ts <- ts(nat_precip$Precipitation, start = 1895, frequency = 1)
+precip_ts_2 <- ts(long_nat_precip$Precipitation, start = c(1895, 1, 1), frequency = 12)
 ```
 
 ## Turnout
@@ -195,6 +198,54 @@ accuracy_compare <- as.data.frame(rbind(fit_row, mean_row, naive_row, snaive_row
 knitr::kable(accuracy_compare)
 ```
 
+#### SARIMA
+
+As it appears that there is some slight seasonality in this data, we can also try fitting a sarima model to see if that performs better.
+
+```{r}
+turnout_ts %>% diff(lag=2) %>% ggtsdisplay()
+```
+
+```{r}
+turnout_ts %>% diff(lag=2) %>% diff() %>% ggtsdisplay()
+```
+
+From these ACF and PACF plots, we can try p values of 0, 1, and 2, q values of 0, 1, 2, and 3, d values of 0 and 1, P values of 0, 1, and 2, Q values of 0, 1, and 2, and D values of 0 and 1. However, after running the model on all of these combinations, I found that the best models in terms of AIC and BIC values are the same ones explored above - ARIMA(2,1,1) and ARIMA(1,1,1), with no seasonal components. Therefore, we don't need to continue with fitting a SARIMA model.
+
+```{r}
+# q = 0,1,2,3, p = 0,1,2, d = 0,1, D of 1, P of 0,1,2, Q of 0,1,2
+
+i = 1
+temp = data.frame()
+ls = matrix(rep(NA, 9*720), nrow = 720)
+
+for(p in c(0,1,2)){
+  for(q in c(0,1,2,3)){
+    for(d in c(0,1)){
+      for(P in c(0,1,2)){
+        for(Q in c(0,1,2)){
+          for(D in c(0,1)){
+            model <- Arima(turnout_ts, order=c(p,d,q), seasonal=c(P,D,Q))
+            ls[i,] = c(p,d,q,P,D,Q, model$aic, model$bic, model$aicc)
+            i=i+1
+          }
+        }
+      }
+    }
+  }
+}
+
+temp = as.data.frame(ls)
+names(temp) = c("p", "d", "q", "P", "D", "Q", "AIC", "BIC", "AICc")
+
+knitr::kable(temp)
+```
+
+```{r}
+# Which model is best
+temp[which.min(temp$AIC), ]
+temp[which.min(temp$BIC), ]
+```
 
 ## Economic Conditions
 
@@ -237,7 +288,7 @@ ggAcf(diff(gdp_ts))
 
 ```{r}
 # Differenced ADF test
-tseries::adf.test(diff(diff(gdp_ts)))
+tseries::adf.test(diff(gdp_ts))
 ```
 
 ```{r}
@@ -253,15 +304,16 @@ gdp_pacf <- ggPacf(diff(diff(gdp_ts)), 20) +
 grid.arrange(gdp_acf, gdp_pacf, ncol = 2)
 ```
 
+
 ```{r}
 # q = 0,1,2, p = 0,1,2,3, d = 1,2
 
 d = 2
 i = 1
 temp = data.frame()
-ls = matrix(rep(NA, 6*24), nrow = 24)
+ls = matrix(rep(NA, 6*36), nrow = 36)
 
-for(p in c(0,1,2)){
+for(p in c(0,1,2,3)){
   for(q in c(0,1,2,3)){
     for(d in c(1,2)){
       model <- Arima(gdp_ts, order = c(p,d,q), include.drift = TRUE, method = 'ML')
@@ -350,6 +402,249 @@ knitr::kable(accuracy_compare)
 ```
 ## Weather
 
+First, we will look at precipitation on a monthly basis, to get a sense and measure how rainfall changes over the course of the years.
+
+```{r}
+weather_acf_2 <- ggAcf(precip_ts_2, 48) +
+  labs(x = "Lag", y = "ACF", title = "Precip ACF Plot") +
+  theme_minimal()
+
+weather_acf_2
+```
+
+As we can see from this ACF graph, there is some clear seasonality in the precipitation patterns. A general differencing does not seem to be enough for this time series, as we can see from the plots below. Therefore, in order to make this series stationary, we will need to test seasonal differences.
+
+```{r}
+precip_ts_2 %>% diff() %>% ggtsdisplay()
+```
+
+The seasonal differencing accomplishes the stationarity pretty well, as does the combination of seasonal and general differencing, so we will test both options in the models. 
+
+```{r}
+precip_ts_2 %>% diff(lag = 12) %>% ggtsdisplay()
+```
+
+```{r}
+precip_ts_2 %>% diff(lag = 12) %>% diff() %>% ggtsdisplay()
+```
+
+From these plots, it seems that the best values of q are 1 and 2, the best values of p are 1, 2, and 3, the best values of d are 0 and 1, the best values of Q are 0 and 1, the best values of P are 0, 1, and 2, and the best value of D is 1.
+
+```{r}
+i=1
+temp= data.frame()
+ls=matrix(rep(NA,9*144),nrow=144)
+D=1
+
+for (p in c(1,2,3))
+{
+  for(q in c(1,2))
+  {
+    for(P in c(0,1,2))
+    {
+      for (Q in c(0,1))
+      {
+        for (d in c(0,1)) 
+        {
+          if(p+d+q+P+D+Q < 8){
+            if (identical(c(p,d,q,P,D,Q),c(2,0,1,2,1,1))){
+              model<- Arima(precip_ts_2,order=c(p,d,q),seasonal=c(P,D,Q), method = 'ML') 
+              ls[i,]= c(p,d,q,P,D,Q,model$aic,model$bic,model$aicc)
+              i=i+1
+            }else{
+              model<- Arima(precip_ts_2,order=c(p,d,q),seasonal=c(P,D,Q)) 
+              ls[i,]= c(p,d,q,P,D,Q,model$aic,model$bic,model$aicc)
+              i=i+1
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+temp= as.data.frame(ls)
+names(temp)= c("p","d","q","P","D","Q","AIC","BIC","AICc")
+
+knitr::kable(temp)
+```
+The model with the lowest AIC value is ARIMA(3,0,2)x(0,1,1), and the model with the lowest BIC value is ARIMA(1,0,1)x(0,1,1).
+```{r}
+# Which model is best
+temp[which.min(temp$AIC), ]
+temp[which.min(temp$BIC), ]
+```
+
+
+#### ARIMA (3,0,2)x(0,1,1)
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+fit_weather_1 <- Arima(precip_ts_2,order=c(3,0,2),seasonal=c(0,1,1))
+summary(fit_weather_1)
+checkresiduals(fit_weather_1)
+```
+
+#### ARIMA (1,0,1)x(0,1,1)
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+fit_weather_2 <- Arima(precip_ts_2,order=c(1,0,1),seasonal=c(0,1,1))
+summary(fit_weather_2)
+checkresiduals(fit_weather_2)
+```
+
+The error measures for these two models are very similar - the (3,0,2)x(0,1,1) model has slightly lower errors, and has a higher p-value for the Ljung-Box test. The distribution and autocorrelation in the residuals is also very similar between the two models. Because they both appear to be good models, I will be more likely to keep the (1,0,1)x(0,1,1) model by the parsimonious principle.
+
+Using auto.arima() results in the ARIMA(1,1,0)x(0,0,2) model, which does not match up with my chosen model. While it is true that some of the values of p,d,q,P,D,and Q in this resulting model were not in consideration for my model, the AIC and BIC values of this model are significantly higher than those in both of my considered models. 
+
+```{r}
+# Use auto.arima()
+auto.arima(precip_ts_2)
+```
+
+In forecasting these two models, the results are again very similar, but as mentioned earlier, I will choose the ARIMA(1,0,1)x(0,1,1) model because of its simplicity.
+
+```{r}
+# Forecast
+fcast_weather_1 <- forecast(fit_weather_1)
+fcast_weather_2 <- forecast(fit_weather_2)
+```
+
+```{r}
+autoplot(fcast_weather_1)
+autoplot(fcast_weather_2)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Plot of benchmark methods
+autoplot(precip_ts_2) +
+  autolayer(meanf(precip_ts_2, h=48),
+            series="Mean", PI=FALSE) +
+  autolayer(naive(precip_ts_2, h=48),
+            series="Naïve", PI=FALSE) +
+  autolayer(snaive(precip_ts_2, h=48),
+            series="SNaïve", PI=FALSE)+
+  autolayer(rwf(precip_ts_2, h=48, drift=TRUE),
+            series="Drift", PI=FALSE)+
+  autolayer(forecast(fit_weather_2,48), 
+            series="fit",PI=FALSE) +
+  guides(colour=guide_legend(title="Forecast")) +
+  labs(x = "Year", y = "Precipitation", title = "Precipitation Forecasts") +
+  theme_minimal()
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Accuracy of benchmark methods
+mean_fit <- meanf(precip_ts_2, h = 36)
+naive_fit <- naive(precip_ts_2, h = 36)
+snaive_fit <- snaive(precip_ts_2, h=36) 
+rwf_fit <- rwf(precip_ts_2, h = 36)
+
+fit_row <- accuracy(fit_weather_2)
+row.names(fit_row) <- 'ARIMA(1,0,1)x(0,1,1) Fit'
+mean_row <- accuracy(mean_fit)
+row.names(mean_row) <- 'Mean Fit'
+naive_row <- accuracy(naive_fit)
+row.names(naive_row) <- 'Naïve Fit'
+snaive_row <- accuracy(snaive_fit)
+row.names(snaive_row) <- 'SNaïve Fit'
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+accuracy_compare <- as.data.frame(rbind(fit_row, mean_row, naive_row, snaive_row))
+knitr::kable(accuracy_compare)
+```
+
+The SARIMA model is better than the benchmark methods based on the table above, and we can do an additional check of the models using seasonal cross validation.
+
+```{r}
+# 1 step ahead
+set.seed(123)
+k <- 48
+n <- length(precip_ts_2)
+
+mae <- matrix(NA, n-k, 12)
+st <- tsp(precip_ts_2)[1] + (k+2)/12
+
+for(i in 1:(n-k)){
+  xtrain <- window(precip_ts_2, end = st + i/12)
+  xtest <- window(precip_ts_2, start = st + (i+1)/12, end = st + (i+12)/12)
+  
+  fit <- Arima(xtrain, order = c(1,0,1),
+               seasonal = list(order = c(0,1,1), 
+                               period = 12, 
+                               include.drift=TRUE, 
+                               lambda=0))
+  fcast <- forecast(fit, h=12)
+  
+  mae[i, 1:length(xtest)] <- abs(fcast$mean-xtest)
+}
+```
+```{r}
+png("cv_1.png")
+
+# Code
+plot(1:12, colMeans(mae, na.rm=TRUE), type = "l", col = 2, xlab="horizon", ylab = "MAE")
+
+# Close device
+dev.off()
+```
+
+
+```{r}
+# (n-k)/12 = 124
+st_12 <- tsp(precip_ts_2)[1] + (k-1)/12
+mae_12 <- matrix(NA, 124, 12)
+
+for (i in 1:123){
+  xtrain <- window(precip_ts_2, end = st + (i-1))
+  xtest <- window(precip_ts_2, start = st + (i-1) + 1/12, end = st + i)
+
+  
+  fit <- Arima(xtrain, order = c(1,0,1),
+               seasonal = list(order = c(0,1,1), 
+                               period = 12, 
+                               include.drift=TRUE, 
+                               lambda=0))
+  fcast <- forecast(fit, h=12)
+  mae_12[i,] <- abs(fcast$mean-xtest)
+}
+```
+
+```{r}
+i = 124
+xtrain <- window(precip_ts_2, end = st + (i-1))
+xtest <- window(precip_ts_2, start = st + (i-1) + 1/12, end = st + i)
+
+
+fit <- Arima(xtrain, order = c(1,0,1),
+             seasonal = list(order = c(0,1,1), 
+                             period = 12, 
+                             include.drift=TRUE, 
+                             lambda=0))
+fcast <- forecast(fit, h=12)
+t1 <- abs(fcast$mean-xtest)
+x <- c(NA)
+t2 <- ts(x, c(2023,3),frequency=12)
+merged_ts <- ts(c(t1, t2),               
+ start = start(t1),
+ frequency = frequency(t1))
+```
+
+```{r}
+mae_12[124, ] <- merged_ts
+```
+
+```{r}
+png("cv_12.png")
+
+# Code
+plot(1:12, colMeans(mae_12, na.rm=TRUE), type = "l", col = 2, xlab="horizon", ylab = "MAE")
+
+# Close device
+dev.off()
+```
+
+Then, we will take a look at the precipitation just in November to see if there are any trends from just that month of each year.
 ```{r}
 # Original ACF Plot
 weather_acf <- ggAcf(precip_ts, 20) +
@@ -406,9 +701,9 @@ temp[which.min(temp$BIC), ]
 ```
 
 ```{r}
-fit_weather_1 <- Arima(precip_ts, order = c(0,0,0))
-summary(fit_weather_1)
-checkresiduals(fit_weather_1)
+fit_weather <- Arima(precip_ts, order = c(0,0,0))
+summary(fit_weather)
+checkresiduals(fit_weather)
 ```
 
 
@@ -417,10 +712,9 @@ checkresiduals(fit_weather_1)
 auto.arima(precip_ts)
 ```
 
-So it's basically just taking the mean
 ```{r}
 # Forecast
-fcast_weather_1 <- forecast(fit_weather_1)
+fcast_weather_ <- forecast(fit_weather_1)
 ```
 
 ```{r}

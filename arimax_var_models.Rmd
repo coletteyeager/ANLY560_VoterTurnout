@@ -1,0 +1,427 @@
+---
+title: "ARIMAX/SARIMAX/VAR models"
+output: html_notebook
+---
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(lubridate)
+library(maps)
+library(gganimate)
+library(transformr)
+library(ggthemes)
+library(gifski)
+library(png)
+library(forecast)
+library(gridExtra)
+
+rm(list = ls())
+```
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+demo_turnout = read.csv("data/Demo_Turnout_rates.csv")
+nat_precip = read.csv("data/Nat_Precip.csv") %>%
+  mutate(Date = as.Date(Date, "%Y-%m-%d"))
+nat_gdp = readxl::read_excel("data/National_GDP.xlsx") %>%
+  mutate(Date = as.Date(Date, "%Y-%m-%d"))
+nat_turnout = read.csv("data/National_Turnout_1789_2018.csv")
+state_gdp_employment = read.csv("data/State_GDP_employment.csv")
+state_weather = read.csv("data/state_weather.csv")
+state_turnout = read.csv("data/Turnout_by_state.csv") %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+
+state_gdp_employment <- reshape2::melt(state_gdp_employment, 
+                                       id = c("GeoName","Description")) %>%
+  rename(State = GeoName, Type_of_Value = Description, 
+         Year = variable, Value = value) %>%
+  mutate(Year = year(as.Date(gsub('X','', Year), "%Y"))) %>%
+  mutate(Type_of_Value = substring(Type_of_Value, 3))
+```
+
+```{r}
+# Time Series objects
+turnout_ts <- ts(nat_turnout$Turnout, start = 1788, frequency = 0.5)
+gdp_ts <- ts(nat_gdp$GDP, start = c(1947, 1), frequency = 4)
+precip_ts <- ts(nat_precip$Precipitation, start = 1895, frequency = 1)
+```
+
+### ARIMAX - turnout and weather
+
+```{r}
+# Combine variables
+turnout_weather <- nat_precip %>%
+  mutate(Year = year(Date)) %>%
+  left_join(nat_turnout[,c('Year', 'Turnout')], by = 'Year') %>%
+  na.omit() %>%
+  dplyr::select(Year, Turnout, Precipitation)
+```
+
+```{r}
+turnout_weather_ts <- ts(turnout_weather, start = 1896, frequency = 0.5)
+```
+
+```{r}
+autoplot(turnout_weather_ts[,c(2:3)], facets = TRUE) +
+  labs(x = "Year", y = "", title = "Turnout and Precipitation") +
+  theme_minimal()
+```
+
+As we can see from this plot, there do appear to be some slight correlations between turnout and precipitation, which we can identify further by modeling.
+
+#### auto.arima() method
+```{r}
+fit <- auto.arima(turnout_weather_ts[, 'Turnout'], xreg = turnout_weather_ts[, "Precipitation"])
+summary(fit)
+```
+
+The model from this is ARIMA(3,1,0).
+
+```{r}
+checkresiduals(fit)
+```
+
+From looking at the residuals of this model, the p-value of the Ljung-Box test is high, and the residuals seem random and normally distributed, so the model fits the data well.
+
+#### manual method
+
+First, we fit a linear model and then pull out the residuals.
+
+```{r}
+# Add time series objects to the data
+turnout_weather$turnout <- ts(turnout_weather$Turnout, star = decimal_date(as.Date("1896-01-01", format = "%Y-%m-%d")), frequency = 0.5)
+turnout_weather$precip <- ts(turnout_weather$Precipitation, star = decimal_date(as.Date("1896-01-01", format = "%Y-%m-%d")), frequency = 0.5)
+
+# Fit the linear model
+fit.reg <- lm(turnout ~ precip, data = turnout_weather)
+summary(fit.reg)
+```
+
+```{r}
+res.fit <- ts(residuals(fit.reg), star = decimal_date(as.Date("1896-01-01", format = "%Y-%m-%d")), frequency = 0.5)
+
+# See ACF and PACF of residuals
+acf_arimax <- ggAcf(res.fit) +
+  theme_minimal() +
+  labs(title = "Residual ACF plot")
+
+pacf_arimax <- ggPacf(res.fit) +
+  theme_minimal() +
+  labs(title = "Residual PACF plot")
+
+grid.arrange(acf_arimax, pacf_arimax, ncol = 2)
+```
+
+As these do not seem to be stationary yet, we can try differencing.
+
+```{r}
+res.fit %>% diff() %>% ggtsdisplay()
+```
+
+```{r}
+res.fit %>% diff(2) %>% ggtsdisplay()
+```
+
+```{r}
+res.fit %>% diff(2) %>% diff() %>% ggtsdisplay()
+```
+
+The parameters we will test are q of 1,2,3, p of 1,2, d of 0,1, P of 0,1, Q of 0,1,2, and D of 0,1.
+
+```{r}
+temp = data.frame()
+ls = matrix(rep(NA, 9*144), nrow=144)
+i = 1
+
+for (p in c(1,2,3)){
+  for (q in c(1,2)){
+    for (d in c(0,1)){
+      for (P in c(0,1)){
+        for (Q in c(0,1,2)){
+          for (D in c(0,1)){
+            if(p+d+q+P+D+Q <= 8){
+              model <- Arima(res.fit, order = c(p,d,q), seasonal = c(P,D,Q))
+              ls[i,] = c(p,d,q,P,D,Q, model$aic, model$bic, model$aicc)
+              i = i+1
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+temp = as.data.frame(ls)
+names(temp)= c("p","d","q","P","D","Q","AIC","BIC","AICc")
+knitr::kable(temp)
+```
+
+```{r}
+temp[which.min(temp$AIC),]
+temp[which.min(temp$BIC),]
+```
+
+The best model from the above options is ARIMA(2,1,1).
+
+```{r}
+manual_model <- Arima(res.fit, order = c(2,1,1))
+checkresiduals(manual_model)
+```
+
+From the residuals for this model, the p-value of the Ljung-Box test is high, and the residuals are well-distributed, so this model fits the data well too.
+
+To compare the model found from `auto.arima()` and this method, we can use cross validation.
+
+
+```{r}
+set.seed(777)
+# Up to 10 steps ahead
+farima1 <- function(x, h){forecast(Arima(x, order=c(3,1,0)), h=h)}
+e1 <- tsCV(res.fit, farima1, h=10)
+
+farima2 <- function(x, h){forecast(Arima(x, order=c(2,1,1)), h=h)}
+e2 <- tsCV(res.fit, farima2, h=10)
+```
+
+```{r}
+rmse1 <- colMeans(sqrt(e1^2), na.rm = TRUE)
+rmse2 <- colMeans(sqrt(e2^2), na.rm = TRUE)
+```
+
+```{r}
+data.frame(h = 1:10, rmse1 = rmse1, rmse2 = rmse2) %>%
+  ggplot(aes(x = h)) + 
+  geom_line(aes(y = rmse1, color = 'ARIMA (3,1,0)')) +
+  geom_line(aes(y = rmse2, color = 'ARIMA (2,1,1)')) +
+  theme_minimal() +
+  labs(x = "horizon", y = "RMSE", title = "Model Comparison Using Cross Validation", color = "Model")
+```
+
+As we can see from this plot, the ARIMA(3,1,0) model has lower RMSE values.
+
+From the summary of the model below, we can see that there appears to be a positive effect of precipitation on turnout, which does not necessarily correlate to previous studies' findings.
+
+```{r}
+# Fitting the model
+fit <- Arima(turnout_weather$Turnout, order = c(3,1,0), xreg = turnout_weather$Precipitation)
+
+summary(fit)
+```
+
+We can then obtain a forecast for turnout after fitting a model for precipitation.
+
+```{r}
+p_fit <- auto.arima(turnout_weather$Precipitation)
+summary(p_fit)
+```
+
+As we had found in the ARIMA tab, precipitation does seem to be a fairly random time series, so the model that best fits this is ARIMA(0,0,0).
+
+Forecasting with this model will give us the plot below.
+
+```{r}
+pexp <- forecast(p_fit)
+fcast <- forecast(fit, xreg = pexp$mean)
+
+autoplot(fcast) +
+  theme_minimal() +
+  labs(x = "Year", y = "Turnout")
+```
+
+As the weather data did appear to be fairly random, it is not very surprising that we don't see much of a difference in the forecast of turnout using precipitation as an exogenous variable compared to the original forecast of turnout.
+
+#### ARIMA pt 2
+
+As discussed at the top of this page, various economic factors can affect voter turnout. While it is a possibility that they could in fact have a multivariate relationship, there are not enough points in the data to form a strong model using VAR, so an ARIMAX model will be able to show one side of the relationship.
+
+```{r}
+nat_econ <- state_gdp_employment %>%
+  filter(State == 'United States') %>%
+  dplyr::select(Year, Type_of_Value, Value) %>%
+  reshape(idvar = 'Year', timevar = 'Type_of_Value', direction = 'wide')
+
+colnames(nat_econ) <- c("Year", "GDP", "Income", "Employment")
+```
+
+```{r}
+turnout_econ <- nat_econ %>%
+  left_join(nat_turnout[,c('Year', 'Turnout')], by = 'Year') %>%
+  na.omit()
+
+turnout_econ_ts <- ts(turnout_econ, start = 1998, frequency = 0.5)
+```
+
+```{r}
+autoplot(turnout_econ_ts[,c(2:5)], facets = TRUE) +
+  labs(x = "Year", y = "", title = "Turnout and Economic Conditions") +
+  theme_minimal()
+```
+
+Though there are not very many data points, we can see that the economic conditions all have an increasing trend, and turnout rates fluctuate but appear to be slightly increasing as well.
+
+#### auto.arima() method
+```{r}
+xreg <- cbind(gdp = turnout_econ_ts[, "GDP"],
+              income = turnout_econ_ts[, "Income"],
+              employ = turnout_econ_ts[,"Employment"])
+
+fit <- auto.arima(turnout_econ_ts[, 'Turnout'], xreg = xreg)
+summary(fit)
+```
+
+```{r}
+checkresiduals(fit)
+```
+
+There does not appear to be much of an effect of the economic features on turnout when using auto.arima to estimate the model - we get a model of ARIMA(0,0,0) that has slightly correlated residuals. We can check if this holds true when fitting a model manually.
+
+```{r}
+# Fit the linear model
+fit.reg <- lm(Turnout ~ GDP + Income + Employment, data = turnout_econ)
+summary(fit.reg)
+```
+
+```{r}
+res.fit <- ts(residuals(fit.reg), star = decimal_date(as.Date("1998-01-01", format = "%Y-%m-%d")), frequency = 0.5)
+
+# See ACF and PACF of residuals
+acf_arimax <- ggAcf(res.fit) +
+  theme_minimal() +
+  labs(title = "Residual ACF plot")
+
+pacf_arimax <- ggPacf(res.fit) +
+  theme_minimal() +
+  labs(title = "Residual PACF plot")
+
+grid.arrange(acf_arimax, pacf_arimax, ncol = 2)
+```
+
+Once again, as these do not seem to be stationary, we can try differencing.
+
+```{r}
+res.fit %>% diff() %>% ggtsdisplay()
+```
+
+```{r}
+res.fit %>% diff(2) %>% ggtsdisplay()
+```
+
+```{r}
+res.fit %>% diff(2) %>% diff() %>% ggtsdisplay()
+```
+
+The parameters we will test again are q of 1,2,3, p of 1,2, d of 0,1, P of 0,1, Q of 0,1,2, and D of 0,1.
+
+```{r}
+temp = data.frame()
+ls = matrix(rep(NA, 9*144), nrow=144)
+i = 1
+
+for (p in c(1,2,3)){
+  for (q in c(1,2)){
+    for (d in c(0,1)){
+      for (P in c(0,1)){
+        for (Q in c(0,1,2)){
+          for (D in c(0,1)){
+            if(p+d+q+P+D+Q <= 8){
+              model <- Arima(res.fit, order = c(p,d,q), seasonal = c(P,D,Q))
+              ls[i,] = c(p,d,q,P,D,Q, model$aic, model$bic, model$aicc)
+              i = i+1
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+temp = as.data.frame(ls)
+names(temp)= c("p","d","q","P","D","Q","AIC","BIC","AICc")
+knitr::kable(temp)
+```
+
+```{r}
+temp[which.min(temp$AIC),]
+temp[which.min(temp$BIC),]
+```
+
+Similar to the weather model, the best fitting model is ARIMA(2,1,1). The residuals of this model fit much better than those of ARIMA(0,0,0), but we can again check which is better using cross validation.
+
+```{r}
+manual_model <- Arima(res.fit, order = c(2,1,1))
+checkresiduals(manual_model)
+```
+
+```{r}
+set.seed(777)
+# Up to 10 steps ahead
+farima1 <- function(x, h){forecast(Arima(x, order=c(0,0,0)), h=h)}
+e1 <- tsCV(res.fit, farima1, h=10)
+
+farima2 <- function(x, h){forecast(Arima(x, order=c(2,1,1)), h=h)}
+e2 <- tsCV(res.fit, farima2, h=10)
+```
+
+```{r}
+rmse1 <- colMeans(sqrt(e1^2), na.rm = TRUE)
+rmse2 <- colMeans(sqrt(e2^2), na.rm = TRUE)
+```
+
+```{r}
+data.frame(h = 1:10, rmse1 = rmse1, rmse2 = rmse2) %>%
+  ggplot(aes(x = h)) + 
+  geom_line(aes(y = rmse1, color = 'ARIMA (0,0,0)')) +
+  geom_line(aes(y = rmse2, color = 'ARIMA (2,1,1)')) +
+  theme_minimal() +
+  labs(x = "horizon", y = "RMSE", title = "Model Comparison Using Cross Validation", color = "Model")
+```
+
+The ARIMA(2,1,1) model has significantly lower RMSE values than ARIMA(0,0,0) does, so we will select this model.
+
+```{r}
+# Fitting the model
+fit <- Arima(turnout_econ$Turnout, order = c(2,1,1), xreg = xreg)
+
+summary(fit)
+```
+
+After fitting this model, however, it does appear that from this small amount of data, GDP, income, and employment do not seem to have any effect on turnout. 
+
+We can then obtain a forecast for turnout after fitting models for the economic conditions.
+
+```{r}
+gdp_fit <- auto.arima(turnout_econ$GDP)
+summary(gdp_fit)
+fgdp <- forecast(gdp_fit)
+```
+
+```{r}
+income_fit <- auto.arima(turnout_econ$Income)
+summary(gdp_fit)
+fincome <- forecast(income_fit)
+```
+
+```{r}
+employ_fit <- auto.arima(turnout_econ$Employment)
+summary(gdp_fit)
+femploy <- forecast(employ_fit)
+```
+
+These models align with the ones found for GDP in the ARIMA page.
+
+After forecasting with these models, we get the plot below.
+```{r}
+fxreg <- cbind(gdp = fgdp$mean,
+               inc = fincome$mean,
+               emp = femploy$mean)
+
+fcast <- forecast(fit, xreg = fxreg, 4)
+
+autoplot(fcast) +
+  theme_minimal() +
+  labs(x = "Year", y = "Turnout")
+```
+
+As GDP, Income, and Employment were all trending upwards, it makes sense that they would forecast turnout to begin trending upwards as well. However, due to the weaker nature of these models from the limited amounts of data, this forecast does not align very well with past years of turnout and so it will be likely the actual future turnout will be closer to the outer confidence intervals.
