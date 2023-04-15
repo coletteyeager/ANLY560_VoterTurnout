@@ -1,0 +1,167 @@
+---
+title: "ARCH/GARCH models"
+output: html_notebook
+---
+
+```{r, include=FALSE, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+library(lubridate)
+library(maps)
+library(gganimate)
+library(transformr)
+library(ggthemes)
+library(gifski)
+library(png)
+library(forecast)
+library(gridExtra)
+library(fGarch) 
+library(dynlm)
+library(astsa) 
+library(xts)
+library(tseries)
+library(fpp2)
+library(fma)
+library(TSstudio)
+library(quantmod)
+library(tidyquant)
+library(TSA)
+library(scales)
+
+rm(list = ls())
+```
+
+### NYT
+```{r}
+nyt <- getSymbols("CMCSA",auto.assign = FALSE, from = "1980-01-01",src="yahoo")
+nyt = data.frame(nyt)
+nyt <- data.frame(nyt,rownames(nyt))
+colnames(nyt)[7] = "date"
+nyt$date<-as.Date(nyt$date,"%Y-%m-%d")
+```
+
+```{r}
+p <- nyt %>%
+  ggplot()+
+  geom_line(aes(y=CMCSA.Adjusted,x=date),color="blue") +
+  theme_minimal() +
+  labs(x = "Date", y = "Adjusted Closing Price", title = "New York Times Stock Prices")
+
+ggplotly(p)
+```
+
+```{r}
+nyt_ts <- ts(nyt$CMCSA.Adjusted, start=decimal_date(as.Date("1980-03-17")), frequency = 365.25)
+```
+
+```{r}
+returns <- diff(log(nyt_ts))
+```
+
+```{r}
+autoplot(returns) +
+  labs(x = "Date", y = "Returns", title = "NYT Returns") +
+  theme_minimal() 
+```
+
+Clear volatility
+
+```{r}
+ggAcf(returns^2, 30)
+ggAcf(abs(returns), 30)
+```
+
+Clear correlation from these plots
+
+```{r}
+acf <- ggAcf(returns, lag.max = 30) +
+  theme_minimal() +
+  labs(x = "Lag", y = "ACF", title = "Returns ACF")
+pacf <- ggPacf(returns, lag.max = 30) +
+  theme_minimal() +
+  labs(x = "Lag", y = "PACF", title = "Returns PACF")
+
+grid.arrange(acf, pacf)
+```
+
+```{r}
+# p and q values of 0-3
+ARMA <- list()
+cc <- 1
+for (p in c(0,1,2,3,4)){
+  for (q in c(0,1,2,3,4)){
+    ARMA[[cc]] <- Arima(returns, order = c(p, 0, q))
+    cc <- cc + 1
+  }
+}
+ARMA_AIC <- sapply(ARMA, AIC)
+ARMA[which(ARMA_AIC == min(ARMA_AIC))]
+```
+```{r}
+ARMA_BIC <- sapply(ARMA, BIC)
+ARMA[which(ARMA_BIC == min(ARMA_BIC))]
+```
+
+```{r}
+auto.arima(returns)
+```
+
+```{r results='hide', fig.keep='all'}
+fit14 <- Arima(returns, order = c(3,0,1))
+fit01 <- Arima(returns, order = c(2,0,1))
+fit52 <- Arima(returns, order = c(1,0,3))
+```
+
+```{r}
+checkresiduals(fit14)
+checkresiduals(fit01)
+checkresiduals(fit52)
+```
+
+```{r}
+summary(fit14)
+```
+```{r}
+summary(fit01)
+```
+```{r}
+summary(fit52)
+```
+
+```{r}
+arima.res <- fit52$residuals
+```
+
+```{r}
+
+```
+
+```{r}
+arima.res^2 %>% ggtsdisplay(lag.ma = 30)
+```
+
+Garch model is necessary because there is correlation in both ACF and PACF
+
+```{r, warning=FALSE}
+garch <- list()
+cc <- 1
+for (p in 0:8){
+  for (q in 1:8){
+    garch[[cc]] <- garch(arima.res, order = c(p,q), trace = F)
+    cc = cc + 1
+  }
+}
+GARCH_AIC <- sapply(garch, AIC)
+garch[[which(GARCH_AIC == min(GARCH_AIC))]]
+```
+
+```{r}
+summary(garchFit(~garch(2,8), arima.res, trace=F))
+```
+
+```{r}
+summary(garchFit(~garch(2,4), arima.res, trace = F))
+```
+
